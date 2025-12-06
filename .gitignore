@@ -1,0 +1,63 @@
+#################################
+# CORE DASHBOARD FILES TO EXCLUDE
+#################################
+# Exclude the entire config directory and its contents
+config/
+
+# Exclude the entire data directory and its contents
+data/
+
+# Exclude the entire modules directory and its contents
+modules/
+
+# Exclude the entire scripts directory and its contents
+scripts/
+
+# Exclude specific files at the root
+failed_player_fetches.csv
+nba_api_endpoints.txt
+
+
+#################################
+# VIRTUAL ENVIRONMENT & CACHE
+#################################
+# Virtual Environment Folders (CRITICAL: Do NOT push this)
+venv/
+env/
+.venv/
+.env/
+
+# Streamlit Local Cache and Config Files
+.streamlit/
+.streamlit_cache/
+streamlit-storage/
+
+#################################
+# PYTHON ARTIFACTS AND BUILD
+#################################
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution, Packaging, and Setuptools
+build/
+develop-eggs/
+dist/
+nba_project.egg-info/ 
+*.egg-info/ 
+
+# Configuration files from package management systems (usually temporary)
+pyproject.toml 
+
+#################################
+# IDE and OS Files
+#################################
+# macOS system files
+.DS_Store
+
+# PyCharm / IntelliJ
+.idea/
+
+# Visual Studio Code (VSCode)
+.vscode/
