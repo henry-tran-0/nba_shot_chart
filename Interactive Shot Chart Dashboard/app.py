@@ -4,122 +4,16 @@ from nba_api.stats.static import players
 from nba_api.stats.endpoints import shotchartdetail, commonplayerinfo
 import plotly.graph_objects as go
 import numpy as np
+from cache_utils import get_player_headshot_url, get_player_list, get_player_position, get_shot_data, get_career_stats, get_zone_efficiency_cached, get_player_game_log
 
 # Functions and Team Logo/Colors
 from shot_chart_utils import draw_half_court, calculate_zone_efficiency 
 from team_logos import get_team_logo_url, get_team_colors 
 
 
-# --- 1. CONFIGURATION AND CACHING ---
-
-def get_player_headshot_url(player_name):
-    #Player headshot URL
-    nba_players = players.get_players()
-    player_info = [p for p in nba_players if p['full_name'] == player_name]
-    
-    if not player_info:
-        return None
-    
-    player_id = player_info[0]['id']
-
-    return f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+# --- 1. CONFIGURATION---
 
 st.set_page_config(layout="wide", page_title="NBA Shot Chart Dashboard")
-
-@st.cache_data
-def get_player_list():
-    #Active NBA player list
-    return sorted([p['full_name'] for p in players.get_players() if p['is_active']])
-
-def get_player_position(player_name):
-    #Player position retrieval
-    nba_players = players.get_players()
-    player_info = [p for p in nba_players if p['full_name'] == player_name]
-    
-    if not player_info:
-        return None
-    
-    player_id = player_info[0]['id']
-    
-    try:
-        player_details = commonplayerinfo.CommonPlayerInfo(player_id=player_id)
-        player_data = player_details.get_normalized_dict()
-        position = player_data['CommonPlayerInfo'][0]['POSITION']
-        return position
-    except Exception as e:
-        print(f"Error fetching position for {player_name}: {e}")
-        return None
-
-@st.cache_data(show_spinner="Fetching shot data from NBA API...", ttl=21600)
-def get_shot_data(player_name, season):
-    #Shot chart data retrieval    
-    nba_players = players.get_players()
-    player_info = [p for p in nba_players if p['full_name'] == player_name]
-    if not player_info:
-        return pd.DataFrame(), None # Return empty data if not found
-        
-    player_id = player_info[0]['id']
-
-    # Shot chart data fetch
-    try:
-        shot_chart = shotchartdetail.ShotChartDetail(
-            team_id=0,
-            player_id=player_id,
-            context_measure_simple='FGA',
-            season_nullable=season
-            
-        )
-        
-        df = shot_chart.get_data_frames()[0]
-        
-        # Determine the player's team ID for the selected season
-        team_id = df['TEAM_ID'].iloc[0] if not df.empty else None
-
-        # Prepare columns for visualization and analysis
-        df['SHOT_RESULT'] = df.apply(lambda row: 'Made' if row['SHOT_MADE_FLAG'] == 1 else 'Missed', axis=1)
-        
-        # Return the DataFrame and Team ID
-        return df, team_id
-    except Exception as e:
-        st.error(f"Error fetching data for {player_name}: {e}")
-        return pd.DataFrame(), None
-    
-
-
-@st.cache_data(show_spinner="Fetching career stats...", ttl=21600)
-def get_career_stats(player_name):
-    #Career per-game averages broken down by season
-    
-    # 1. Get Player ID
-    nba_players = players.get_players()
-    player_info = [p for p in nba_players if p['full_name'] == player_name]
-    if not player_info:
-        return pd.DataFrame() 
-        
-    player_id = player_info[0]['id']
-
-
-
-    try:
-        from nba_api.stats.endpoints import playercareerstats
-        
-        career_stats = playercareerstats.PlayerCareerStats(
-            player_id=player_id,
-            per_mode36='PerGame' 
-        )
-        
-        # Regular season averages
-        df_season_averages = career_stats.get_data_frames()[0].sort_values(by='SEASON_ID', ascending=False)     
-        
-        
-        # Drop irrelevant columns 
-        df_season_averages = df_season_averages.drop(columns=['PLAYER_ID', 'LEAGUE_ID'])
-        
-        return df_season_averages
-    except Exception as e:
-        st.error(f"Error fetching career data: {e}")
-        return pd.DataFrame()
-
 
 # --- 2. SIDEBAR FOR FILTERS ---
 
@@ -140,6 +34,7 @@ selected_season = st.sidebar.selectbox(
     index=0
 )
 
+
 # Fetch the data based on selection
 df_shots, team_id = get_shot_data(selected_player, selected_season)
 
@@ -147,7 +42,14 @@ df_career_totals = get_career_stats(selected_player)
 
 player_position = get_player_position(selected_player) 
 
+game_log = get_player_game_log(selected_player, selected_season)
+
+
+
+
+
 # --- THEME CUSTOMIZATION ---
+
 primary_color, secondary_color = get_team_colors(team_id)
 
 st.markdown(
@@ -255,7 +157,7 @@ if df_shots is None or df_shots.empty:
     st.warning("No shot data available for the selected criteria.")
 else:
     # --- TABS: CHART vs. EFFICIENCY TABLE ---
-    tab1, tab2, tab3 = st.tabs(["📊 Interactive Shot Chart", "📈 Efficiency Report", "⭐ Career Averages"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Interactive Shot Chart", "📈 Efficiency Report", "⭐ Career Averages", "📅 Regular Season Game Log"])
 
     with tab1:
         st.header("Shot Location & Efficiency")
@@ -291,22 +193,46 @@ else:
         st.header("Zone Efficiency Breakdown")
         
         # Calculate the zone stats using the utility function
-        df_efficiency = calculate_zone_efficiency(df_shots)
+        df_efficiency = get_zone_efficiency_cached(selected_player, selected_season, df_shots)
         
-        # Formatted Column
-        df_efficiency['FG_PCT'] = (df_efficiency['FG_PCT'] * 100).round(1).astype(str) + '%'
+        #Formatted column 
+        df_efficiency['FG_PCT'] = df_efficiency['FG_PCT'] * 100.0
+
         
         # Column Renaming for Clarity
-        df_efficiency.columns = ['Zone Name', 'Attempts (FGA)', 'Made (FGM)', 'FG Percentage']
+        df_efficiency.columns = ['Zone Name', 
+                                 'Attempts (FGA)', 
+                                 'Made (FGM)', 
+                                 'FG Percentage']
+
+        
+
+        df_efficiency = df_efficiency.sort_values(by='FG Percentage', ascending=False)
         
         # Display the efficiency table
-        st.dataframe(df_efficiency, width='stretch', hide_index=True)
-        
+        st.dataframe(
+        df_efficiency[['Zone Name', 'Made (FGM)', 'Attempts (FGA)', 'FG Percentage']], 
+        width='stretch', 
+        hide_index=True,
+        column_config={
+            
+            "FG Percentage": st.column_config.ProgressColumn(
+                "FG Percentage",
+                help="Field Goal Efficiency by Zone",
+                
+                # Formatting to display as percentage
+                format="%.1f%%", 
+                
+                min_value=0.0, 
+                max_value=100.0
+            )
+        }
+    )      
         st.markdown(f"***\nTotal shots analyzed: **{len(df_shots)}**")
     
 
     with tab3:
-        st.header(f"Career Regular Season Averages by Season ({selected_player})")
+        st.header(f"Career Regular Season Averages by Season")
         
         if df_career_totals.empty:
             st.warning("Career statistics are not available for this player.")
@@ -344,4 +270,72 @@ else:
                 df_display, 
                 width='stretch', 
                 hide_index=True
+            )
+
+    with tab4:
+
+
+        st.header(f"Game Log for {selected_season} Regular Season")
+        
+        if game_log is None or game_log.empty:
+            st.warning("Game log data is not available for this player/season.")
+        else:
+            columns_to_keep = [
+                'GAME_DATE', 
+                'MATCHUP', 
+                'WL', 
+                'MIN', 
+                'FGM',
+                'FGA',
+                'FG_PCT',
+                'FG3M',
+                'FG3A',
+                'FG3_PCT',
+                'FTM',
+                'FTA',
+                'FT_PCT',
+                'OREB',
+                'DREB',
+                'PTS', 
+                'REB', 
+                'AST', 
+                'STL', 
+                'BLK', 
+                'TOV',
+                'PF',
+                'PLUS_MINUS'
+            ]
+
+            df_display = game_log[columns_to_keep]
+
+            df_display = df_display.rename(columns={
+                'GAME_DATE': 'Date',
+                'WL': 'W/L',
+                'FGM': 'FG Made',
+                'FGA': 'FG Attempted',
+                'FG_PCT': 'FG%',
+                'FG3M': '3P Made',
+                'FG3A': '3P Attempted',
+                'FG3_PCT': '3P%',
+                'FTM': 'FT Made',
+                'FTA': 'FT Attempted',
+                'FT_PCT': 'FT%',
+                'OREB': 'Off Reb',
+                'DREB': 'Def Reb',
+                'PF': 'Personal Fouls',
+                'PLUS_MINUS': '+/-'
+            })
+
+            #for col in ['FG%', '3P%', 'FT%']:
+            #    df_display[col] = (df_display[col] * 100).round(1).astype(str) + '%'
+
+
+
+            st.dataframe(
+                df_display,
+                width='stretch',
+                hide_index=True,
+                column_config={
+                "GAME_DATE": st.column_config.DatetimeColumn("Date", format="MMM DD, YYYY")
+                }
             )
