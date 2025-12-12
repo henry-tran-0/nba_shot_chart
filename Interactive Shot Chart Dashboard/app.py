@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import numpy as np
 from cache_utils import get_player_headshot_url, get_player_list, get_player_position, get_shot_data, get_career_stats, get_zone_efficiency_cached, get_player_game_log
 
+
 # Functions and Team Logo/Colors
 from shot_chart_utils import draw_half_court, calculate_zone_efficiency 
 from team_logos import get_team_logo_url, get_team_colors 
@@ -58,11 +59,11 @@ st.markdown(
         /* Change the main background color */
         .stApp {{
             background-color: {primary_color};
-            color: {secondary_color}; 
+            color: #FFFFFF; 
         }}
         /* Change header colors to secondary color */
         h1, h2, h3, h4, .css-10trblm {{
-            color: {secondary_color};
+            color: #FFFFFF;
         }}
         /* Change sidebar background color */
         .css-1d3z3vf {{
@@ -98,11 +99,11 @@ with col_headshot:
         )
 
 with col_title:
-    # 1. Highest Priority: Player Name
-    st.title(f"{selected_player} - {player_position}")
-    
-    # 2. Secondary Priority: Season
-    st.subheader(f"{selected_season} Season") 
+    # We use HTML here to force the Secondary Color ONLY for this title
+    st.markdown(f"""
+        <h1 style='color: {secondary_color}; margin-bottom: 0px;'>{selected_player} - {player_position}</h1>
+        <h3 style='color: {secondary_color}; margin-top: 0px;'>{selected_season} Season</h3>
+    """, unsafe_allow_html=True)
 
 with col_logo:
     if logo_url:
@@ -157,9 +158,9 @@ if df_shots is None or df_shots.empty:
     st.warning("No shot data available for the selected criteria.")
 else:
     # --- TABS: CHART vs. EFFICIENCY TABLE ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Interactive Shot Chart", "📈 Efficiency Report", "⭐ Career Averages", "📅 Regular Season Game Log"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Scouting Report", "📊 Interactive Shot Chart", "📈 Efficiency Report", "⭐ Career Averages", "📅 Regular Season Game Log"])
 
-    with tab1:
+    with tab2:
         st.header("Shot Location & Efficiency")
         
         # Base Court Figure
@@ -189,7 +190,7 @@ else:
         # Display the figure
         st.plotly_chart(fig, width='stretch')
         
-    with tab2:
+    with tab3:
         st.header("Zone Efficiency Breakdown")
         
         # Calculate the zone stats using the utility function
@@ -231,7 +232,7 @@ else:
         st.markdown(f"***\nTotal shots analyzed: **{len(df_shots)}**")
     
 
-    with tab3:
+    with tab4:
         st.header(f"Career Regular Season Averages by Season")
         
         if df_career_totals.empty:
@@ -272,7 +273,7 @@ else:
                 hide_index=True
             )
 
-    with tab4:
+    with tab5:
 
 
         st.header(f"Game Log for {selected_season} Regular Season")
@@ -339,3 +340,233 @@ else:
                 "GAME_DATE": st.column_config.DatetimeColumn("Date", format="MMM DD, YYYY")
                 }
             )
+
+    with tab1:
+        st.header("📋 Scouting Report")
+        st.markdown("*> Generated based on spatial data and game logs.*")
+
+        if df_shots.empty or game_log.empty:
+            st.warning("Insufficient data to generate analysis.")
+        else:
+            # A. OFFENSIVE AUDIT LOGIC
+            zone_stats = df_shots.groupby(['SHOT_ZONE_BASIC', 'SHOT_ZONE_AREA']).apply(
+                lambda x: pd.Series({
+                    'FGA': len(x),
+                    'FGM': x['SHOT_MADE_FLAG'].sum(),
+                    'FG_PCT': x['SHOT_MADE_FLAG'].mean()
+                })
+            ).reset_index()
+            
+            # Create combined name like in your efficiency table
+            zone_stats['ZONE_NAME'] = zone_stats['SHOT_ZONE_BASIC'] + ' - ' + zone_stats['SHOT_ZONE_AREA']
+            
+            # Filter for zones with at least 5 attempts 
+            qualified_zones = zone_stats[zone_stats['FGA'] > 5].copy()
+            
+            if not qualified_zones.empty:
+                # Sort by FG% first (descending), then by FGA (descending) for tiebreaker
+                qualified_zones_sorted_best = qualified_zones.sort_values(
+                    by=['FG_PCT', 'FGA'], 
+                    ascending=[False, False]
+                )
+                
+                # Sort by FG% first (ascending), then by FGA (descending) for worst
+                qualified_zones_sorted_worst = qualified_zones.sort_values(
+                    by=['FG_PCT', 'FGA'], 
+                    ascending=[True, False]
+                )
+                
+                # Get top 3
+                top_3_best = qualified_zones_sorted_best.head(3)
+                top_3_worst = qualified_zones_sorted_worst.head(3)
+            else:
+                top_3_best = pd.DataFrame()
+                top_3_worst = pd.DataFrame()
+
+            # B. DEFENSIVE SCOUTING LOGIC (Left vs Right Splits)
+            # LOC_X < 0 is Left Side (Stage Left/Court Right), LOC_X > 0 is Right Side
+            left_side = df_shots[df_shots['LOC_X'] < 0].copy()
+            right_side = df_shots[df_shots['LOC_X'] > 0].copy()
+            
+            # Add minimum sample size
+            min_attempts = 10
+            if len(left_side) >= min_attempts and len(right_side) >= min_attempts:
+                left_pct = left_side['SHOT_MADE_FLAG'].mean()
+                right_pct = right_side['SHOT_MADE_FLAG'].mean()
+                
+                # Determine strong hand
+                if left_pct > (right_pct + 0.05):
+                    hand_bias = "LEFT"
+                    defensive_strategy = "FORCE RIGHT"
+                elif right_pct > (left_pct + 0.05):
+                    hand_bias = "RIGHT"
+                    defensive_strategy = "FORCE LEFT"
+                else:
+                    hand_bias = "BALANCED"
+                    defensive_strategy = "PLAY STRAIGHT UP"
+            else:
+                hand_bias = "INSUFFICIENT DATA"
+                defensive_strategy = "NEED MORE SHOT VOLUME"
+                left_pct = right_pct = 0
+            
+            # C. RELIABILITY LOGIC (Consistency)
+            if not game_log.empty and len(game_log) > 1:
+                avg_pts = game_log['PTS'].mean()
+                std_dev_pts = game_log['PTS'].std()
+                
+                # Coefficient of Variation (CV) - Lower is more consistent
+                cv = std_dev_pts / avg_pts if avg_pts > 0 else 0
+                
+                if cv < 0.2:
+                    consistency_grade = "High Reliability (Consistent)"
+                    consistency_description = "This player delivers predictable scoring output game-to-game. Defenses can't rely on off-nights, and offenses can count on steady production."
+                elif cv < 0.4:
+                    consistency_grade = "Moderate Variance (Normal)"
+                    consistency_description = "Standard NBA variability. The player has occasional hot and cold streaks, but performance stays within a reasonable range."
+                else:
+                    consistency_grade = "High Variance (Volatile)"
+                    consistency_description = "Boom-or-bust player. Expect significant swings between dominant performances and quiet nights. Game plan accordingly based on matchups and recent form."
+            else:
+                consistency_grade = "Insufficient Games Played"
+                consistency_description = "Need more game data to assess scoring consistency patterns."
+                cv = 0
+
+            # --- UI DISPLAY ---
+
+            # COLUMN 1: OFFENSIVE OPTIMIZATION
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("🚀 Offensive Optimization")
+                if not top_3_best.empty:
+                    st.success("**🟢 Green Light Zones** (Highest Value)")
+                    st.write("Most efficient zones weighted by volume and shot value:")
+                    
+                    for idx, zone in top_3_best.iterrows():
+                        with st.container():
+                            st.markdown(f"**{zone['ZONE_NAME']}**")
+                            col_a, col_b, col_c = st.columns(3)
+                            col_a.metric("FG%", f"{zone['FG_PCT']*100:.1f}%")
+                            col_b.metric("Makes", f"{int(zone['FGM'])}")
+                            col_c.metric("Attempts", f"{int(zone['FGA'])}")
+                            st.markdown("---")
+                    
+                    st.error("**🔴 Red Light Zones** (Lowest Value)")
+                    st.write("The player struggles here. Defenses should invite these shots:")
+                    
+                    for idx, zone in top_3_worst.iterrows():
+                        with st.container():
+                            st.markdown(f"**{zone['ZONE_NAME']}**")
+                            col_a, col_b, col_c = st.columns(3)
+                            col_a.metric("FG%", f"{zone['FG_PCT']*100:.1f}%")
+                            col_b.metric("Makes", f"{int(zone['FGM'])}")
+                            col_c.metric("Attempts", f"{int(zone['FGA'])}")
+                            st.markdown("---")
+                else:
+                    st.info("Not enough shot attempts per zone (need >5) to generate recommendations.")
+
+            # COLUMN 2: DEFENSIVE SCOUTING
+            with col2:
+                st.subheader("🛡️ Defensive Strategy")
+                
+                # --- 1. DIRECTIONAL BIAS ---
+                if hand_bias != "INSUFFICIENT DATA":
+                    st.info(f"**Directive:** {defensive_strategy}")
+                    
+                    st.write("### Directional Splits")
+                    c1, c2 = st.columns(2)
+                    c1.metric("Left Side FG%", f"{left_pct*100:.1f}%")
+                    c2.metric("Right Side FG%", f"{right_pct*100:.1f}%")
+                    
+                    if hand_bias != "BALANCED":
+                        st.caption(f"Player shoots significantly better from the **{hand_bias}** side.")
+                    else:
+                        st.caption("Player is ambidextrous/balanced.")
+                else:
+                    st.warning("Need at least 10 attempts per side for directional analysis.")
+                
+                st.markdown("---")
+                
+                # --- 2. DEFENSIVE COVERAGE SCHEME ---
+                st.write("### 🧪 Defensive Coverage Scheme")
+                st.caption("Which defensive layer should we concede to minimize expected points?")
+                
+                # Helper function to categorize shots into defensive layers
+                def get_defensive_layer(row):
+                    zone = row['SHOT_ZONE_BASIC']
+                    if 'Restricted Area' in zone:
+                        return 'Rim (Protect)'
+                    elif 'Mid-Range' in zone or 'In The Paint (Non-RA)' in zone:
+                        return 'Mid-Range (Force)'
+                    elif 'Above the Break 3' in zone or 'Corner 3' in zone or 'Backcourt' in zone:
+                        return 'Perimeter (Chase)'
+                    return 'Other'
+                
+                # Create distinct copy for layer analysis
+                layer_df = df_shots.copy()
+                layer_df['DEF_LAYER'] = layer_df.apply(get_defensive_layer, axis=1)
+                
+                # Calculate PPS (Points Per Shot) by layer
+                def calculate_pps(group):
+                    total_points = 0
+                    for _, shot in group.iterrows():
+                        if shot['SHOT_MADE_FLAG'] == 1:
+                            # Check actual shot type for correct point value
+                            points = 3 if shot['SHOT_TYPE'] == '3PT Field Goal' else 2
+                            total_points += points
+                    return total_points / len(group) if len(group) > 0 else 0
+                
+                layer_stats = layer_df.groupby('DEF_LAYER').apply(
+                    lambda x: pd.Series({
+                        'FGA': len(x),
+                        'FG_PCT': x['SHOT_MADE_FLAG'].mean(),
+                        'PPS': calculate_pps(x)
+                    })
+                ).reset_index()
+                
+                # Filter valid layers with sufficient volume
+                layer_stats = layer_stats[layer_stats['DEF_LAYER'] != 'Other']
+                layer_stats = layer_stats[layer_stats['FGA'] > 5]
+                
+                if not layer_stats.empty:
+                    # Find lowest and highest PPS layers
+                    force_layer = layer_stats.loc[layer_stats['PPS'].idxmin()]
+                    deny_layer = layer_stats.loc[layer_stats['PPS'].idxmax()]
+                    
+                    # Display strategy
+                    st.success(f"**✅ FORCE: {force_layer['DEF_LAYER']}**")
+                    st.write(f"Concede this layer. It yields the lowest points per possession (**{force_layer['PPS']:.2f} PPS**).")
+                    
+                    st.error(f"**❌ DENY: {deny_layer['DEF_LAYER']}**")
+                    st.write(f"Do not allow attempts here (**{deny_layer['PPS']:.2f} PPS**).")
+                    
+                    # Visualization
+                    st.bar_chart(layer_stats.set_index('DEF_LAYER')['PPS'])
+                    st.caption("Points Per Shot (PPS) by Defensive Layer")
+                else:
+                    st.info("Insufficient volume to determine coverage scheme.")
+            
+            st.divider()
+
+            # SECTION 3: CONSISTENCY REPORT
+            st.subheader("📉 Reliability & Context")
+            st.write(f"**Grading:** {consistency_grade}")
+            st.write(f"*{consistency_description}*")
+            
+            if not game_log.empty and len(game_log) > 1:
+                # Show key stats
+                col_stat1, col_stat2, col_stat3 = st.columns(3)
+                col_stat1.metric("Average PPG", f"{avg_pts:.1f}")
+                col_stat2.metric("Std Deviation", f"{std_dev_pts:.1f}", 
+                            help="Measures game-to-game variation. Lower = more predictable scoring.")
+                col_stat3.metric("Coeff. of Variation", f"{cv:.2f}", 
+                            help="Consistency metric (Std Dev ÷ Average). Under 0.2 = very consistent, over 0.4 = volatile.")
+                
+                # Add interpretive context
+                st.write(f"**Typical scoring range:** {avg_pts - std_dev_pts:.1f} to {avg_pts + std_dev_pts:.1f} points (~68% of games)")
+                
+                # Visualization of Variance
+                st.bar_chart(game_log.set_index('GAME_DATE')[['PTS']])
+                st.caption("Game-by-Game Scoring Output showing variance.")
+            else:
+                st.info("Need multiple games to assess consistency.")

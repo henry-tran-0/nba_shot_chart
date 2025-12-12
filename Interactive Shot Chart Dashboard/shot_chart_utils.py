@@ -130,7 +130,7 @@ def calculate_zone_efficiency(df):
         return df
 
     # Group by the primary zone descriptors
-    zone_stats = df.groupby(['SHOT_ZONE_BASIC', 'SHOT_ZONE_AREA', 'SHOT_ZONE_RANGE']).agg(
+    zone_stats = df.groupby(['SHOT_ZONE_BASIC', 'SHOT_ZONE_AREA']).agg(
         FGA=('SHOT_ATTEMPTED_FLAG', 'sum'),
         FGM=('SHOT_MADE_FLAG', 'sum')
     ).reset_index()
